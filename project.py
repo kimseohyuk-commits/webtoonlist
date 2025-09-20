@@ -96,6 +96,10 @@ def add_comment(share_id: str, email: str, name: str, text: str):
         "text": text.strip()
     }).execute()
 
+params = st.experimental_get_query_params()
+if "error" in params:
+    st.error(f"Google OAuth error: {params.get('error')} / {params.get('error_description')}")
+
 # =========================
 # --- OAuth (Google)
 # =========================
@@ -117,20 +121,32 @@ def google_oauth_button():
 
 def oauth_authorize_button(oauth, label: str, redirect_uri: str, key: str):
     """
-    여러 버전 호환:
-    - 어떤 버전은 scope를 '문자열'로, 어떤 버전은 list로 받음.
-    먼저 문자열로 시도 → 실패하면 list로 재시도.
+    streamlit-oauth 버전별 authorize_button 시그니처 차이를 흡수해서 안전하게 호출한다.
+    scope는 문자열 우선("openid email profile")로 전달하고, 실패 시 list로 재시도한다.
+    'key'는 반드시 문자열로 보장하며, key 위치가 바뀐 시그니처도 순차적으로 대응한다.
     """
     scope_str = "openid email profile"
     scope_list = ["openid", "email", "profile"]
 
-    # 0) 0.1.14 스타일: 위치 인자 + 문자열 scope
+    # 0) 가장 단순: 필수 3개만 (label, redirect_uri, scope[str])
     try:
-        return oauth.authorize_button(label, redirect_uri, scope_str, key, True, {"prompt": "select_account"})
-    except TypeError:
+        return oauth.authorize_button(label, redirect_uri, scope_str)
+    except Exception:
         pass
 
-    # 1) 키워드 인자 + 문자열 scope
+    # 1) 위치 인자 스타일(일부 버전): (label, redirect_uri, scope, key, use_container_width, extras_params)
+    try:
+        return oauth.authorize_button(label, redirect_uri, scope_str, key, True, {"prompt": "select_account"})
+    except Exception:
+        pass
+
+    # 2) 위치 인자 다른 순서 스타일: (label, redirect_uri, scope, use_container_width, key, extras_params)
+    try:
+        return oauth.authorize_button(label, redirect_uri, scope_str, True, key, {"prompt": "select_account"})
+    except Exception:
+        pass
+
+    # 3) 키워드 스타일 A
     try:
         return oauth.authorize_button(
             label,
@@ -140,24 +156,49 @@ def oauth_authorize_button(oauth, label: str, redirect_uri: str, key: str):
             use_container_width=True,
             extras_params={"prompt": "select_account"},
         )
-    except TypeError:
+    except Exception:
         pass
 
-    # 2) 키워드 인자 + 리스트 scope (일부 포크/버전)
+    # 4) 키워드 스타일 B (scope -> scopes)
     try:
         return oauth.authorize_button(
             label,
             redirect_uri=redirect_uri,
-            scope=scope_list,
+            scopes=scope_str,
             key=key,
             use_container_width=True,
             extras_params={"prompt": "select_account"},
         )
-    except TypeError as e:
-        import inspect
-        st.error("`authorize_button` 시그니처가 예상과 다릅니다. 아래 시그니처를 보고 맞춰 주세요.")
+    except Exception:
+        pass
+
+    # 5) scope를 list로 바꿔 재시도 (일부 포크)
+    for sc in (scope_list,):
+        # 5-1) 위치 인자
+        try:
+            return oauth.authorize_button(label, redirect_uri, sc, key, True, {"prompt": "select_account"})
+        except Exception:
+            pass
+        # 5-2) 키워드
+        try:
+            return oauth.authorize_button(
+                label,
+                redirect_uri=redirect_uri,
+                scope=sc,
+                key=key,
+                use_container_width=True,
+                extras_params={"prompt": "select_account"},
+            )
+        except Exception:
+            pass
+
+    import inspect
+    st.error("`authorize_button` 시그니처를 자동으로 맞출 수 없습니다. 아래 시그니처를 보고 한 줄로 수정해주세요.")
+    try:
         st.code(str(inspect.signature(oauth.authorize_button)))
-        raise e
+    except Exception:
+        st.write("시그니처를 introspect할 수 없습니다. streamlit-oauth 버전을 확인하세요: `pip show streamlit-oauth`")
+    st.stop()
 
 def fetch_google_userinfo(access_token: str):
     try:
